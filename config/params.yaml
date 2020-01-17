@@ -1,0 +1,54 @@
+ctrl:
+  feat_ext: true
+  learn: true
+  train_data: noisy
+#  dataset_path: '/data/FSDnoisy18k/'
+  dataset_path: '/data/FSDKaggle2018x/FSDnoisy18k/'
+#  dataset_path: '../../icassp19/data/FSDnoisy18k/'
+extract:
+  audio_len_s: 2
+  eps: 2.220446049250313e-16
+  fmax: 22050
+  fmin: 0
+  fs: 44100
+  hop_length_samples: 882
+  load_mode: varup
+  log: true
+  mono: true
+  n_fft: 2048
+  n_mels: 96
+  normalize_audio: true
+  patch_hop: 50
+  patch_len: 100
+  spectrogram_type: power
+  win_length_samples: 1764
+learn:
+  batch_size: 64
+  lr: 0.001
+  n_classes: 20
+  n_epochs: 100
+  optim: Adam
+  patience: 15
+  val_split: 0.15
+  LSR: false
+  eps_LSR_noisy: 0.15
+  LSRmode: GROUPS2
+  delta_eps_LSR: 0.05
+  mixup: false
+  mixup_alpha: 0.1
+  mixup_mode: intra
+  mixup_warmup_epochs: 10
+  mode: 2
+  model: baseline # DenSE
+  stage1_epoch: 20
+loss:
+  q_loss: 0.5
+  q_loss2: 0.5
+  m_loss2: 0.93
+  perc_loss2: 93.0
+  type: lq_lqmax_time_sudden # CCE, lq_lqperc_time_sudden, lq_lqmax_time_sudden
+recognizer:
+  aggregate: gmean
+suffix:
+  in: _mel
+  out: _label
