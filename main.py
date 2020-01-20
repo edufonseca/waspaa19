@@ -594,13 +594,22 @@ te_files = [f for f in os.listdir(params_path.get('featurepath_te')) if f.endswi
 te_preds = np.empty((len(te_files), params_learn.get('n_classes')))
 
 # grab every T_F file (computed on the file level) - split it in T_F patches and store it in tensor, sorted by file
-te_gen_patch = PatchGeneratorPerFile(feature_dir=params_path.get('featurepath_te'),
-                                     file_list=te_files,
-                                     params_extract=params_extract,
-                                     suffix_in='_mel',
-                                     floatx=np.float32,
-                                     scaler=tr_gen_patch.scaler
-                                     )
+try:
+    te_gen_patch = PatchGeneratorPerFile(feature_dir=params_path.get('featurepath_te'),
+                                         file_list=te_files,
+                                         params_extract=params_extract,
+                                         suffix_in='_mel',
+                                         floatx=np.float32,
+                                         scaler=tr_gen_patch.scaler
+                                         )
+except:
+    te_gen_patch = PatchGeneratorPerFile(feature_dir=params_path.get('featurepath_te'),
+                                         file_list=te_files,
+                                         params_extract=params_extract,
+                                         suffix_in='_mel',
+                                         floatx=np.float32,
+                                         scaler=tr_scaler
+                                         )
 
 for i in trange(len(te_files), miniters=int(len(te_files) / 100), ascii=True, desc="Predicting..."):
     # return all patches for a sound file
