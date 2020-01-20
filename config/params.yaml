@@ -2,9 +2,7 @@ ctrl:
   feat_ext: true
   learn: true
   train_data: noisy
-#  dataset_path: '/data/FSDnoisy18k/'
-  dataset_path: '/data/FSDKaggle2018x/FSDnoisy18k/'
-#  dataset_path: '../../icassp19/data/FSDnoisy18k/'
+  dataset_path: '/data/FSDnoisy18k/'
 extract:
   audio_len_s: 2
   eps: 2.220446049250313e-16
@@ -32,21 +30,28 @@ learn:
   val_split: 0.15
   LSR: false
   eps_LSR_noisy: 0.15
-  LSRmode: GROUPS2
-  delta_eps_LSR: 0.05
-  mixup: false
+  LSRmode: false
+  delta_eps_LSR: 0.0
+  mixup: true
   mixup_alpha: 0.1
   mixup_mode: intra
   mixup_warmup_epochs: 10
-  mode: 2
-  model: baseline # DenSE
+  mode: 0
+  model: baseline # baseline, DenSE
   stage1_epoch: 20
+  prune_stage1: 15
+  prune_loss_type: lq_loss
+  prune_loss_q_value: 0.7
+  prune_aggregate_loss_clip: amean
+  prune_loss_threshold_method: percentile
+  prune_discard_percentile: 97.75
+  densenet_modules: 4
 loss:
-  q_loss: 0.5
+  q_loss: 0.7
   q_loss2: 0.5
   m_loss2: 0.93
   perc_loss2: 93.0
-  type: lq_lqmax_time_sudden # CCE, lq_lqperc_time_sudden, lq_lqmax_time_sudden
+  type: lq_loss # CCE, lq_loss, lq_lqperc_time_sudden, lq_lqmax_time_sudden,
 recognizer:
   aggregate: gmean
 suffix:

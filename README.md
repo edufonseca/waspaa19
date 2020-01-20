@@ -50,7 +50,7 @@ The goal is to define the parameters of the experiment. The file is structured w
   - 0: warm-up based mixup
   - 1: standard training procedure, including LSR, standard mixup, and non time-dependent loss function
   - 2: time-dependent loss function: discard large loss instances from each mini-batch of data dynamically at every iteration
-  - 3: prune train set: after *n1* epochs, use checkpoint to predict scores on train set, convert to losses, discard clips associated with large loss values, keep a subset to continue learning
+  - 3: prune train set: after *n1* epochs, use checkpoint to predict scores on train set, convert to losses, prune clips associated with large loss values, keep a subset to continue learning
 
 LSR parameters (defined in Sections 2.1 and 4.1):  
 
@@ -80,14 +80,15 @@ Loss functions parameters (defined in Sections 2.3 and 4.3):
   
    - `learn.stage1_epoch`: number of epochs for stage1
    - `loss.q_loss2`: example of a hyper-parameter (q value) for loss function in second learning stage
-   - `loss.perc_loss2`: percentile {99.0, 96.0, 93.0} to use as max threshold such that losses greater than that are discarded in second learning stage
+   - `loss.perc_loss2`: percentile {99.0, 96.0, 93.0} used as max threshold such that losses greater than that are discarded in second learning stage
 
   If `learn.mode = 3`, the following can also be defined:
 
-  - to do
+   - `learn.prune_stage1`: number of epochs before pruning
+   - `learn.prune_loss_type`: loss function used to compute losses for pruning
+   - `learn.prune_discard_percentile`: percentile {99.25, 98.5, 97.75, 97, 96.25} used as max threshold such that clips associated with greater losses are pruned
 
-
-Please check the paper for more details. The remaining parameters should be rather intuitive.
+Please check the paper for more details. The remaining parameters should be intuitive.
 
 
 #### (2) Execute the code by:
@@ -103,7 +104,7 @@ You can check the `logs/*.out`. Results are shown in a table (search for `ACCURA
  
 ## Contact
 
-You are welcome to contact me privately should you have any question/suggestion or if you have any problems running the code at eduardo.fonseca@upf.edu. You can also create an issue.
+You are welcome to contact me privately should you have any question/suggestion at eduardo.fonseca@upf.edu. You can also create an issue.
 
 ## References
 

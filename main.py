@@ -28,12 +28,13 @@ import logging
 
 from keras.optimizers import Adam
 from keras.callbacks import EarlyStopping, ReduceLROnPlateau
+from keras.utils import to_categorical
 
 import utils
 from utils import GetCurrentEpoch
 from feat_ext import load_audio_file, get_mel_spectrogram, modify_file_variable_length
 from data import get_label_files, DataGeneratorPatch, PatchGeneratorPerFile
-from architectures import get_model_baseline
+from architectures import get_model_baseline, get_model_DenSE
 from eval import Evaluator
 from losses import lq_loss_wrap
 from loss_time import TimeLossModel
@@ -349,9 +350,8 @@ tr_loss, val_loss = [0] * params_learn.get('n_epochs'), [0] * params_learn.get('
 if params_ctrl.get('learn'):
     if params_learn.get('model') == 'baseline':
         model = get_model_baseline(params_learn=params_learn, params_extract=params_extract)
-    # fix add DenSE model
-    # elif params_learn.get('model') == 'DenSE':
-    #     model = get_model_DenSE(params_learn=params_learn, params_extract=params_extract)
+    elif params_learn.get('model') == 'DenSE':
+        model = get_model_DenSE(params_learn=params_learn, params_extract=params_extract)
 
 if params_learn.get('mode') == 0:
     # implementing a warmup period for mixup*******************************************************
@@ -361,7 +361,6 @@ if params_learn.get('mode') == 0:
     model.compile(optimizer=opt, loss=params_loss.get('type'), metrics=['accuracy'])
     model.summary()
 
-    # warmup****************************************** no mixup is applied
     logger.info('===WARMUP STAGE (no mixup)**************************.')
 
     # delete previous generator to free memory
@@ -391,7 +390,6 @@ if params_learn.get('mode') == 0:
                                 verbose=2,
                                 callbacks=callback_list)
 
-    # warmup****************************************** we apply mixup now
     logger.info('===FINAL STAGE (with mixup)**************************')
 
     # delete previous generator to free memory
@@ -479,7 +477,111 @@ elif params_learn.get('mode') == 2:
                                              callbacks=callback_list)
 
 elif params_learn.get('mode') == 3:
-    logger.info('Using mode 3: prune train set with current model checkpoint.')
+    logger.info('Using mode 3: prune train set with current model checkpoint after learn.prune_stage1 epochs.')
+
+    opt = Adam(lr=params_learn.get('lr'))
+    model.compile(optimizer=opt, loss=params_loss.get('type'), metrics=['accuracy'])
+    model.summary()
+
+    logger.info('STAGE 1: Train with Lq for n1 epoch on entire train set========================================')
+
+    # callbacks
+    reduce_lr = ReduceLROnPlateau(monitor='val_acc', factor=0.5, patience=5, verbose=1)
+    callback_list = [reduce_lr]
+
+    hist1 = model.fit_generator(tr_gen_patch,
+                                steps_per_epoch=tr_gen_patch.nb_iterations,
+                                epochs=params_learn.get('prune_stage1'),
+                                validation_data=val_gen_patch,
+                                validation_steps=val_gen_patch.nb_iterations,
+                                workers=4,
+                                verbose=2,
+                                class_weight=None,
+                                callbacks=callback_list)
+
+    logger.info('Predict on the TRAIN set: predictions at patch level:========================================')
+
+    tr_scaler = tr_gen_patch.scaler
+    del tr_gen_patch
+    tr_gen_patch_for_prediction = PatchGeneratorPerFile(feature_dir=params_path.get('featurepath_tr'),
+                                                        file_list=tr_files,
+                                                        params_extract=params_extract,
+                                                        suffix_in='_mel',
+                                                        floatx=np.float32,
+                                                        scaler=tr_scaler
+                                                        )
+
+    from_clip_to_loss_clip = {item: [] for item in tr_files}
+    losses_train_set_clip = [None] * len(tr_files)
+
+    for i in trange(len(tr_files), miniters=int(len(tr_files) / 100), ascii=True, desc="Predicting..."):
+        # return all patches for a sound file
+        patches_file = tr_gen_patch_for_prediction.get_patches_file()
+        preds_patch_list = model.predict(patches_file).tolist()
+        preds_patch = np.array(preds_patch_list)
+
+        # get gt as one-hot-vector to compute losses
+        label = utils.load_tensor(in_path=os.path.join(params_path.get('featurepath_tr'),
+                                                       tr_files[i].replace('_mel', '_label')))
+        y_true = to_categorical(int(label[0]), num_classes=params_learn.get('n_classes'))
+
+        # from predictions at patch level to loss values at patch level (one real value per patch)
+        if params_learn.get('prune_loss_type') == 'lq_loss':
+            y_pred = np.clip(preds_patch, params_extract.get('eps'), 1. - params_extract.get('eps'))
+            q = params_learn.get('prune_loss_q_value')
+            tmp = y_pred * y_true
+            loss = np.max(tmp, axis=-1)
+            prune_loss = (1 - (loss + 10 ** (-8)) ** q) / q
+
+        # aggregate patch level loss values to one loss value per clip in train set
+        if params_learn.get('prune_aggregate_loss_clip') == 'amean':
+            from_clip_to_loss_clip[tr_files[i]] = np.mean(prune_loss, axis=0)
+            losses_train_set_clip[i] = np.mean(prune_loss, axis=0)
+
+    losses_train_set = np.array(losses_train_set_clip)
+    logger.info('Use loss values to prune dataset ========================================')
+
+    # define upper threshold for pruning
+    if params_learn.get('prune_loss_threshold_method') == 'percentile':
+        thres = np.percentile(losses_train_set, params_learn.get('prune_discard_percentile'))
+        logger.info('Pruning through percentile {}'.format(params_learn.get('prune_discard_percentile')))
+
+    # losses higher than thres are discarded through pruning
+    tr_files_after_pruning = []
+    for k, v in from_clip_to_loss_clip.items():
+        if v <= thres:
+            tr_files_after_pruning.append(k)
+
+    logger.info('Number of clips kept for stage 2 after pruning: {}'.format(len(tr_files_after_pruning)))
+    logger.info('Number of clips pruned: {}'.format(len(tr_files) - len(tr_files_after_pruning)))
+
+    logger.info('STAGE 2: Train with Lq until convergence on tr_files_after_pruning===================================')
+
+    del tr_gen_patch_for_prediction
+    tr_gen_patch_pruned = DataGeneratorPatch(feature_dir=params_path.get('featurepath_tr'),
+                                             file_list=tr_files_after_pruning,
+                                             params_learn=params_learn,
+                                             params_extract=params_extract,
+                                             suffix_in='_mel',
+                                             suffix_out='_label',
+                                             floatx=np.float32
+                                             )
+
+    # callbacks
+    early_stop = EarlyStopping(monitor='val_acc', patience=params_learn.get('patience'), min_delta=0.001, verbose=1)
+    reduce_lr = ReduceLROnPlateau(monitor='val_acc', factor=0.5, patience=5, verbose=1)
+    callback_list = [early_stop, reduce_lr]
+
+    hist2 = model.fit_generator(tr_gen_patch_pruned,
+                                steps_per_epoch=tr_gen_patch_pruned.nb_iterations,
+                                initial_epoch=params_learn.get('prune_stage1'),
+                                epochs=params_learn.get('n_epochs'),
+                                validation_data=val_gen_patch,
+                                validation_steps=val_gen_patch.nb_iterations,
+                                class_weight=None,
+                                workers=4,
+                                verbose=2,
+                                callbacks=callback_list)
 
 # ==================================================================================================== PREDICT
 # ==================================================================================================== PREDICT
@@ -488,13 +590,10 @@ elif params_learn.get('mode') == 3:
 logger.info('Compute predictions on test set:==================================================\n')
 
 list_preds = []
-
 te_files = [f for f in os.listdir(params_path.get('featurepath_te')) if f.endswith(suffix_in + '.data')]
-# to store predictions
 te_preds = np.empty((len(te_files), params_learn.get('n_classes')))
 
-# grab every T_F rep file (computed on the file level)
-# split it in T_F patches and store it in tensor, sorted by file
+# grab every T_F file (computed on the file level) - split it in T_F patches and store it in tensor, sorted by file
 te_gen_patch = PatchGeneratorPerFile(feature_dir=params_path.get('featurepath_te'),
                                      file_list=te_files,
                                      params_extract=params_extract,
@@ -506,8 +605,6 @@ te_gen_patch = PatchGeneratorPerFile(feature_dir=params_path.get('featurepath_te
 for i in trange(len(te_files), miniters=int(len(te_files) / 100), ascii=True, desc="Predicting..."):
     # return all patches for a sound file
     patches_file = te_gen_patch.get_patches_file()
-
-    # predicting now on the T_F patch level (not on the wav clip-level)
     preds_patch_list = model.predict(patches_file).tolist()
     preds_patch = np.array(preds_patch_list)
 
@@ -521,20 +618,18 @@ for i in trange(len(te_files), miniters=int(len(te_files) / 100), ascii=True, de
 
     te_preds[i, :] = preds_file
 
-
 list_labels = np.array(list_labels)
 pred_label_files_int = np.argmax(te_preds, axis=1)
 pred_labels = [int_to_label[x] for x in pred_label_files_int]
 
 # create dataframe with predictions
 # columns: fname & label
-# this is based on the features file, instead on the wav file (extraction errors could occur)
+# this is based on the features file, instead on the wav file
 te_files_wav = [f.replace(suffix_in + '.data', '.wav') for f in os.listdir(params_path.get('featurepath_te'))
                 if f.endswith(suffix_in + '.data')]
 pred = pd.DataFrame(te_files_wav, columns=["fname"])
 pred['label'] = pred_labels
 
-#
 # # =================================================================================================== EVAL
 # # =================================================================================================== EVAL
 # # =================================================================================================== EVAL
